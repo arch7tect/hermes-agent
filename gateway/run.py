@@ -13709,6 +13709,7 @@ class GatewayRunner:
             # triggering an UnboundLocalError on the earlier read at
             # `_resolve_turn_agent_config(message, …)`.
             nonlocal message
+            nonlocal disabled_toolsets
 
             # session_key is now set via contextvars in _set_session_env()
             # (concurrency-safe). Keep os.environ as fallback for CLI/cron.
