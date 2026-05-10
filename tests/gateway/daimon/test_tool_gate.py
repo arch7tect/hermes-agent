@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import threading
+import time
 
 import pytest
 
@@ -188,3 +189,35 @@ class TestConcurrentSessionsIsolated:
         # Each session should have allowed exactly its limit
         for i in range(4):
             assert results[f"t-{i}"] == i + 1
+
+    def test_same_session_check_and_record_is_atomic(self):
+        """Parallel calls for one limited session must not all pass the same count."""
+        limiter = ToolLimiter({"terminal": 1})
+        original_check = limiter.check
+
+        def slow_check(tool_name: str) -> bool:
+            allowed = original_check(tool_name)
+            time.sleep(0.01)
+            return allowed
+
+        limiter.check = slow_check
+        register_limiter("shared", limiter)
+
+        barrier = threading.Barrier(8)
+        results = []
+        results_lock = threading.Lock()
+
+        def worker():
+            barrier.wait()
+            allowed = check_tool_call("shared", "terminal") is None
+            with results_lock:
+                results.append(allowed)
+
+        threads = [threading.Thread(target=worker) for _ in range(8)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+
+        assert results.count(True) == 1
+        assert limiter._counts["terminal"] == 1
