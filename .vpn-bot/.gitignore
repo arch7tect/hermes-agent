@@ -1,0 +1,4 @@
+unified-vpn-bot.env
+offset.json
+__pycache__/
+*.pyc
