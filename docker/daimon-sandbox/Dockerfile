@@ -24,12 +24,9 @@ RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
     && apt-get update && apt-get install -y gh \
     && rm -rf /var/lib/apt/lists/*
 
-# Install gosu for privilege dropping in entrypoint
-RUN apt-get update && apt-get install -y --no-install-recommends gosu \
-    && rm -rf /var/lib/apt/lists/*
-
 # Create non-root user (no sudo access)
 RUN useradd -m -u 1000 -s /bin/bash agent
+RUN useradd -m -u 1001 -s /usr/sbin/nologin broker
 
 # Create workspace root
 RUN mkdir -p /workspaces && chown agent:agent /workspaces
@@ -37,45 +34,35 @@ RUN mkdir -p /workspaces && chown agent:agent /workspaces
 # Create directory for hermes-agent clone (populated externally or at first boot)
 RUN mkdir -p /opt/hermes-agent && chown agent:agent /opt/hermes-agent
 
-# Create secrets directory (credential server reads from here)
-RUN mkdir -p /run/secrets
-
 # Git config for the agent user — set at SYSTEM level (/etc/gitconfig)
 # because /home is mounted as tmpfs at runtime, wiping per-user configs.
 RUN git config --system user.name "daimon[bot]" \
     && git config --system user.email "daimon[bot]@nousresearch.com" \
-    && git config --system credential.helper daimon \
     && git config --system init.defaultBranch main
-
-# Build credential server (root-only daemon, reads token, serves via socket)
-COPY credential-server.c /tmp/credential-server.c
-RUN gcc -O2 -Wall -o /usr/local/bin/credential-server /tmp/credential-server.c \
-    && rm /tmp/credential-server.c
-
-# Install credential helper client (root-only — agent user cannot execute it)
-COPY git-credential-daimon /usr/local/bin/git-credential-daimon
-RUN chmod 700 /usr/local/bin/git-credential-daimon
-
-# gh-broker: allowlisted GitHub operations broker.
-# The agent calls 'gh' which is actually the broker — it validates the
-# subcommand against an allowlist, fetches the token from the credential
-# server socket INTERNALLY, runs the real gh binary in a subprocess,
-# and returns only the output. The agent never sees the raw token.
-COPY gh-broker.py /usr/local/bin/gh-broker
-RUN chmod 755 /usr/local/bin/gh-broker \
-    && mv /usr/bin/gh /usr/bin/gh-real \
-    && ln -s /usr/local/bin/gh-broker /usr/bin/gh
-
-# Remove the credential helper from git config — agent should NOT
-# be able to call 'git credential fill' to extract the token.
-# The broker handles auth internally.
-RUN git config --system --unset credential.helper || true
 
 # Default working directory
 WORKDIR /workspaces
 
+FROM base AS agent
+
+COPY gh_client.py /usr/local/bin/gh-client
+RUN chmod 755 /usr/local/bin/gh-client \
+    && rm -f /usr/bin/gh \
+    && ln -s /usr/local/bin/gh-client /usr/bin/gh \
+    && git config --system --unset-all credential.helper || true
+
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod 755 /entrypoint.sh
+USER agent
 
 ENTRYPOINT ["/entrypoint.sh"]
 CMD ["sleep", "infinity"]
+
+FROM base AS broker
+
+RUN mkdir -p /run/secrets
+COPY gh_broker.py /usr/local/bin/gh-broker
+COPY broker-entrypoint.sh /broker-entrypoint.sh
+RUN chmod 755 /usr/local/bin/gh-broker /broker-entrypoint.sh
+
+ENTRYPOINT ["/broker-entrypoint.sh"]

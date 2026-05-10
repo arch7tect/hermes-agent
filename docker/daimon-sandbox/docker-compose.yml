@@ -1,6 +1,8 @@
 services:
   daimon-sandbox:
-    build: .
+    build:
+      context: .
+      target: agent
     container_name: daimon-sandbox
     restart: unless-stopped
 
@@ -9,11 +11,6 @@ services:
       - no-new-privileges:true
     cap_drop:
       - ALL
-    cap_add:
-      - SETUID    # gosu privilege drop in entrypoint
-      - SETGID    # gosu privilege drop in entrypoint
-      - CHOWN     # entrypoint file ownership
-      - FOWNER    # entrypoint chmod
 
     # Resources
     mem_limit: 8g
@@ -23,9 +20,34 @@ services:
     networks:
       - daimon-net
 
+    volumes:
+      - hermes-repo:/opt/hermes-agent:ro
+
+  daimon-github-broker:
+    build:
+      context: .
+      target: broker
+    container_name: daimon-github-broker
+    restart: unless-stopped
+
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - SETUID
+      - SETGID
+
+    mem_limit: 512m
+    cpus: "0.5"
+
+    networks:
+      - daimon-net
+
     # GitHub token: bind-mounted as root:root 600 from host.
-    # The agent user (uid 1000) CANNOT read this file.
-    # Only the credential-server (root) can read it and serve via socket.
+    # The untrusted agent container never receives this mount.
+    # GH_TOKEN_PATH is intentionally required: do not fall back to a checkout-local
+    # file because bind mounts preserve host ownership and permissions.
     #
     # Setup on host (once, as root):
     #   mkdir -p /home/daimon/.hermes/profiles/daimon/secrets
@@ -33,8 +55,7 @@ services:
     #   chmod 600 /home/daimon/.hermes/profiles/daimon/secrets/gh_token
     #   chown root:root /home/daimon/.hermes/profiles/daimon/secrets/gh_token
     volumes:
-      - hermes-repo:/opt/hermes-agent:ro
-      - ${GH_TOKEN_PATH:-./secrets/gh_token.txt}:/run/secrets/gh_token:ro
+      - ${GH_TOKEN_PATH:?GH_TOKEN_PATH must be set to an absolute host path for the root-owned 0600 GitHub token}:/run/secrets/gh_token:ro
 
 volumes:
   hermes-repo:
